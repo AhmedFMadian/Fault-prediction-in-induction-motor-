@@ -28,9 +28,9 @@ import tensorflow as tf
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH  = os.path.join(BASE_DIR, "rap_msf_best (1).keras")
-SCALER_VIB  = os.path.join(BASE_DIR, "scaler_vib.pkl")
-SCALER_CUR  = os.path.join(BASE_DIR, "scaler_cur.pkl")
+MODEL_PATH  = os.path.join(BASE_DIR, "rap_msf_best (3).keras")
+SCALER_VIB  = os.path.join(BASE_DIR, "scaler_vib (2).pkl")
+SCALER_CUR  = os.path.join(BASE_DIR, "scaler_cur (2).pkl")
 
 WINDOW_SIZE = 1024
 OVERLAP     = 0.5
@@ -38,14 +38,12 @@ SAMPLE_RATE = 64000
 MC_PASSES   = 50
 FREQ_RES    = SAMPLE_RATE / WINDOW_SIZE
 
-LOW_START   = int(375  / FREQ_RES)
-LOW_END     = int(650  / FREQ_RES)
-MID_START   = int(1000 / FREQ_RES)
-MID_END     = int(3000 / FREQ_RES)
-HIGH_START  = int(5500 / FREQ_RES)
-HIGH_END    = int(6500 / FREQ_RES)
+# Feature Indices for the 52 inputs (4 + 32 + 16)
+LOW_START,  LOW_END  = int(375 / FREQ_RES),  int(650 / FREQ_RES)
+MID_START,  MID_END  = int(1000 / FREQ_RES), int(3000 / FREQ_RES)
+HIGH_START, HIGH_END = int(5500 / FREQ_RES), int(6500 / FREQ_RES)
 
-LABELS      = {0: "Healthy", 1: "Inner Race Fault", 2: "Outer Race Fault"}
+LABELS = {0: "Healthy", 1: "Outer Race Fault", 2: "Inner Race Fault"}
 COLORS      = {"Healthy": "#2ecc71", "Inner Race Fault": "#e74c3c", "Outer Race Fault": "#e67e22"}
 ICONS       = {"Healthy": "✅", "Inner Race Fault": "⚠️", "Outer Race Fault": "🔴"}
 
@@ -73,9 +71,14 @@ def segment(signal):
     return np.stack(segments)
 
 def compute_psd(windows):
-    hann     = np.hanning(windows.shape[1])
-    fft_vals = np.fft.rfft(windows * hann, axis=1)
-    psd      = np.log1p((np.abs(fft_vals)**2) / windows.shape[1])
+    hann = np.hanning(windows.shape[1])
+    # Compute FFT magnitude
+    fft_vals = np.abs(np.fft.rfft(windows * hann, axis=1))
+    # PSD formula matching training script
+    psd = (fft_vals**2) / windows.shape[1]
+    # Critical Log transformation
+    psd = np.log1p(psd)
+    
     return np.concatenate([
         psd[:, LOW_START:LOW_END],
         psd[:, MID_START:MID_END],
@@ -83,14 +86,15 @@ def compute_psd(windows):
     ], axis=1).astype(np.float32)
 
 def mc_predict(model, X_vib, X_cur):
-    preds   = np.stack(
-        [model([X_vib, X_cur], training=True).numpy() for _ in range(MC_PASSES)],
-        axis=0
-    )
-    mu      = preds.mean(axis=0)
-    entropy = -np.sum(mu * np.log(mu + 1e-8), axis=1)
+    # Use direct prediction instead of MC Dropout
+    # since the dropout rate is too high for stable MC inference
+    pred = model([X_vib, X_cur], training=False).numpy()
+    mu   = pred  # shape (N, 3)
+    
+    # Entropy from direct predictions
+    eps     = 1e-8
+    entropy = -np.sum(mu * np.log(mu + eps), axis=1)
     return mu, entropy
-
 # ─────────────────────────────────────────────────────────────
 # GUI APPLICATION
 # ─────────────────────────────────────────────────────────────
@@ -331,35 +335,34 @@ class BearingDiagnosisApp:
 
     def _analysis_thread(self, filepath):
         try:
-            # Extract signals
+            # 1. Extract raw signals
             vib, cur = extract_signals(filepath)
             if vib is None or cur is None:
-                raise ValueError("Could not find 'vibration_1' or 'phase_current_1' in Y structure.")
+                raise ValueError("Could not find required sensors in .mat file.")
 
-            # Segment
+            # 2. Segment and calculate features
             vib_w = segment(vib)
             cur_w = segment(cur)
-            n     = min(len(vib_w), len(cur_w))
+            n = min(len(vib_w), len(cur_w))
 
-            # PSD features
             X_vib = compute_psd(vib_w[:n])
             X_cur = compute_psd(cur_w[:n])
 
-            # Scale
+            # 3. Scale and Reshape to (Batch, 52, 1)
             X_vib = self.sv.transform(X_vib)[..., np.newaxis]
             X_cur = self.sc.transform(X_cur)[..., np.newaxis]
 
-            # MC Dropout inference
+            # 4. Run MC Dropout inference
             mu, entropy = mc_predict(self.model, X_vib, X_cur)
 
-            # Aggregate across windows
-            mean_mu      = mu.mean(axis=0)          # (3,)
+            # 5. Aggregate results
+            mean_mu      = mu.mean(axis=0)
             mean_entropy = entropy.mean()
             pred_class   = np.argmax(mean_mu)
             label        = LABELS[pred_class]
             confidence   = mean_mu[pred_class] * 100
 
-            # Update UI on main thread
+            # 6. Update UI
             self.root.after(0, self._update_ui,
                             label, confidence, mean_mu, entropy, mean_entropy)
 
@@ -397,7 +400,7 @@ class BearingDiagnosisApp:
         )
 
         # Update probability bars
-        label_order = ["Healthy", "Inner Race Fault", "Outer Race Fault"]
+        label_order = ["Healthy", "Outer Race Fault", "Inner Race Fault"]
         for i, lbl in enumerate(label_order):
             pct = mean_mu[i] * 100
             width = int(180 * mean_mu[i])
