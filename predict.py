@@ -124,7 +124,7 @@ class BearingDiagnosisApp:
                  font=("Segoe UI", 18, "bold"),
                  fg="#cdd6f4", bg="#12121f").pack()
         tk.Label(header,
-                 text="Probabilistic Multi-Sensor Fusion  |  MC Dropout Uncertainty",
+                 text="Probabilistic Multi-Sensor Fusion ",
                  font=("Segoe UI", 10),
                  fg="#6c7086", bg="#12121f").pack()
 
@@ -195,7 +195,7 @@ class BearingDiagnosisApp:
                  fg="#cdd6f4", bg="#313244").pack(anchor="w", padx=12, pady=(10, 4))
 
         info_text = (
-            "Uses MC Dropout with T=50\n"
+            
             "stochastic forward passes to\n"
             "produce a diagnosis + confidence\n"
             "score on every prediction.\n\n"
